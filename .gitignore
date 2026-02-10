@@ -161,3 +161,29 @@ cython_debug/
 
 .ruff_cache/
 *.zip
+
+
+
+# # OS / editor
+# .DS_Store
+# .vscode/
+
+# # Python
+# __pycache__/
+# *.pyc
+
+# Data / models / artifacts
+*.npy
+# *.pkl
+*.bin
+*.json
+data/
+
+# Profiling / performance
+# *.html
+*.lprof
+scalene-profile*
+memray*
+
+# # Misc
+# *.log
