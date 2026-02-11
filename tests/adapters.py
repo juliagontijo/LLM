@@ -11,7 +11,7 @@ from torch import Tensor
 
 from student.pretokenization import train_bpe
 from student.tokenizer import Tokenizer
-from student.transformer import Linear, Embedding, RMSNorm, SwiGLU, RotaryPositionalEmbedding, softmax
+from student.transformer import Linear, Embedding, RMSNorm, SwiGLU, RotaryPositionalEmbedding, softmax, scaled_dot_product_attention, MHSA, TransformerBlock
 
 
 def run_linear(
@@ -116,7 +116,7 @@ def run_scaled_dot_product_attention(
     Returns:
         Float[Tensor, " ... queries d_v"]: Output of SDPA
     """
-    raise NotImplementedError
+    return scaled_dot_product_attention(Q, K, V, mask)
 
 
 def run_multihead_self_attention(
@@ -152,7 +152,9 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    mhsa = MHSA(d_model, num_heads)
+    mhsa.load_state_dict({"q_proj_weight": q_proj_weight, "k_proj_weight": k_proj_weight, "v_proj_weight": v_proj_weight, "o_proj_weight": o_proj_weight})
+    return mhsa.forward(in_features)
 
 
 def run_multihead_self_attention_with_rope(
@@ -194,7 +196,14 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_out"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+
+    head_dim = d_model // num_heads
+    rope = RotaryPositionalEmbedding(theta, head_dim , max_seq_len)
+
+    mhsa = MHSA(d_model, num_heads, token_positions, rope)
+    mhsa.load_state_dict({"q_proj_weight": q_proj_weight, "k_proj_weight": k_proj_weight, "v_proj_weight": v_proj_weight, "o_proj_weight": o_proj_weight})
+    return mhsa.forward(in_features)
+
 
 
 def run_rope(
@@ -291,7 +300,26 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    head_dim = d_model // num_heads
+    rope = RotaryPositionalEmbedding(theta, head_dim * num_heads, max_seq_len)
+    transformer_block = TransformerBlock(d_model, num_heads, d_ff, rope, max_seq_len)
+    state = {
+        "attn.q_proj_weight": weights["attn.q_proj.weight"],
+        "attn.k_proj_weight": weights["attn.k_proj.weight"],
+        "attn.v_proj_weight": weights["attn.v_proj.weight"],
+        "attn.o_proj_weight": weights["attn.output_proj.weight"],
+        "ln1.g": weights["ln1.weight"],
+        "ffn.w1": weights["ffn.w1.weight"],
+        "ffn.w2": weights["ffn.w2.weight"],
+        "ffn.w3": weights["ffn.w3.weight"],
+        "ln2.g": weights["ln2.weight"],
+    }
+
+    transformer_block.load_state_dict(state)
+
+
+
+
 
 
 def run_transformer_lm(
