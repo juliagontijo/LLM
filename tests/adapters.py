@@ -301,8 +301,8 @@ def run_transformer_block(
         running the Transformer block on the input features while using RoPE.
     """
     head_dim = d_model // num_heads
-    rope = RotaryPositionalEmbedding(theta, head_dim * num_heads, max_seq_len)
-    transformer_block = TransformerBlock(d_model, num_heads, d_ff, rope, max_seq_len)
+    rope = RotaryPositionalEmbedding(theta, head_dim, max_seq_len)
+    transformer_block = TransformerBlock(d_model, num_heads, d_ff, rope, None, max_seq_len)
     state = {
         "attn.q_proj_weight": weights["attn.q_proj.weight"],
         "attn.k_proj_weight": weights["attn.k_proj.weight"],
@@ -316,6 +316,8 @@ def run_transformer_block(
     }
 
     transformer_block.load_state_dict(state)
+
+    return transformer_block.forward(in_features)
 
 
 

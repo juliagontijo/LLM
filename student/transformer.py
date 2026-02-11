@@ -216,16 +216,16 @@ class MHSA(nn.Module):
 
 
 
-class FFN(nn.Module):
-    def __init__(self, d_model, d_ff):
-        super().__init__()
+# class FFN(nn.Module):
+#     def __init__(self, d_model, d_ff):
+#         super().__init__()
 
-        self.fc1 = Linear(d_model, d_ff)
-        self.act = SwiGLU(d_model, d_ff)
-        self.fc2 = Linear(d_ff, d_model)
+#         self.fc1 = Linear(d_model, d_ff)
+#         self.act = SwiGLU(d_model, d_ff)
+#         self.fc2 = Linear(d_ff, d_model)
 
-    def forward(self, x):
-        return self.fc2(self.act(self.fc1(x)))
+#     def forward(self, x):
+#         return self.fc2(self.act(self.fc1(x)))
     
 class TransformerBlock(nn.Module):
     def __init__(self, d_model, num_heads, d_ff, rope=None, token_positions = None, max_seq_length=None, device=None, dtype=None):
@@ -238,34 +238,28 @@ class TransformerBlock(nn.Module):
         self.token_positions = token_positions
 
         self.ln1 = RMSNorm(d_model) # normalize
-        self.attn = MHSA(d_model, num_heads) 
-        self.ffn = FFN(d_model, d_ff) # FFN
+        self.attn = MHSA(d_model, num_heads, token_positions, rope, max_seq_length) 
+        self.ffn = SwiGLU(d_model, d_ff) # FFN
         self.ln2 = RMSNorm(d_model) # normalize
 
 
     def forward(self, x):
         residual = x
 
-        # normalize
-        normalized = self.ln1.forward(x)
-
-        #MHSAwith rope
-        headed = self.attn.forward(normalized)
+        # normalize and mhsa with rope
+        part1 = self.attn.forward(self.ln1.forward(x))
 
         # add result to residual
-        intermediate_result = residual + headed
+        intermediate_result = residual + part1
 
         # residual becomes this answer\
         residual = intermediate_result
 
-        #normalize
-        normalized = self.ln2.forward(intermediate_result)
-
-        #FFN
-        intermediate_result = self.ffn(normalized)
+        #normalize and FFN
+        part2 = self.ffn(self.ln2.forward(intermediate_result))
 
         #add result to residual
-        result = intermediate_result + residual
+        result = residual + part2
 
         return result
 
