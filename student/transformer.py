@@ -4,6 +4,8 @@ import torch.nn.init as init
 from einops import rearrange, einsum
 import math
 
+# TOTAL_FLOPS = 0
+
 class Linear(nn.Module):
     def __init__(self, in_features, out_features, device=None, dtype=None):
         super().__init__()
@@ -21,6 +23,11 @@ class Linear(nn.Module):
     def forward(self, x):
         # W shape is (d_out, d_in)
         # x shape is (... d_in)
+        FLOPS = 2 * x.shape[0] * x.shape[-1] * self.W.shape[0]
+        # TOTAL_FLOPS += FLOPS
+        print(x.shape)
+        print(self.W.shape)
+        print(f"\nLinear\ndim: m = {x.shape[0]}, n = {x.shape[-1]}, p = {self.W.shape[0]}\nFLOPS: {FLOPS}")
         return einsum(x, self.W, "... d_in, d_out d_in -> ... d_out")
     
 class Embedding(nn.Module):
@@ -67,17 +74,37 @@ class SwiGLU(nn.Module):
         self.d_model = d_model
         self.d_ff = d_ff
 
-        self.w1 = nn.Parameter(torch.empty(self.d_ff, self.d_model))
-        self.w2 = nn.Parameter(torch.empty(self.d_model, self.d_ff))
-        self.w3 = nn.Parameter(torch.empty(self.d_ff, self.d_model))
+        self.w1 = nn.Parameter(torch.zeros(self.d_ff, self.d_model))
+        self.w2 = nn.Parameter(torch.zeros(self.d_model, self.d_ff))
+        self.w3 = nn.Parameter(torch.zeros(self.d_ff, self.d_model))
 
 
     def forward(self, x):
+        leading = math.prod(x.shape[:-1])
+        FLOPS = 2 * leading * x.shape[-1] * self.w1.shape[0]
+        # TOTAL_FLOPS += FLOPS
+        print("\n",x.shape)
+        print(self.w1.shape)
+        print(f"SwiGLU\ndim: m = {leading}, n = {x.shape[-1]}, p = {self.w1.shape[0]}\nFLOPS: {FLOPS}\n\n")
+
+        FLOPS = 2 * leading * x.shape[-1] * self.w3.shape[0]
+        # TOTAL_FLOPS += FLOPS
+        print(x.shape)
+        print(self.w3.shape)
+        print(f"SwiGLU\ndim: m = {leading}, n = {x.shape[-1]}, p = {self.w3.shape[0]}\nFLOPS: {FLOPS}\n\n")
+
         # x shape is ... d_model
         part1 = einsum(self.w1, x, "d_ff d_model, ... d_model -> ... d_ff")
         part3 = einsum(self.w3, x, "d_ff d_model, ... d_model -> ... d_ff")  
         silu_ = self.silu(part1) * part3 # [... d_ff] * [... d_ff] = [... d_ff]
         out = einsum(self.w2, silu_, "d_model d_ff, ... d_ff -> ... d_model")
+
+        leading = math.prod(silu_.shape[:-1])
+        FLOPS = 2 * math.prod(silu_.shape[:-1]) * silu_.shape[-1] * self.w2.shape[0]
+        # TOTAL_FLOPS += FLOPS
+        print(silu_.shape)
+        print(self.w2.shape)
+        print(f"SwiGLU\ndim: m = {math.prod(silu_.shape[:-1])}, n = {silu_.shape[-1]}, p = {self.w2.shape[0]}\nFLOPS: {FLOPS}\n\n")
 
         return out 
     
@@ -152,6 +179,21 @@ def softmax(x, i):
 def scaled_dot_product_attention(query, key, value, mask = None):
     # q, k has shape (batch_size, ..., seq_len, d_k)
     # v has shape (batch_size, ..., seq_lev, d_v)
+
+    # FLOPS - START
+    lead = torch.broadcast_shapes(query.shape[:-2], key.shape[:-2])
+    batch = math.prod(lead) if len(lead) else 1
+    q = query.shape[-2]
+    d = query.shape[-1]
+    k = key.shape[-2]
+    sufix = q * k
+    FLOPS = 2 * batch * sufix * d
+    # TOTAL_FLOPS += FLOPS
+    print("\n",query.shape)
+    print(key.shape)
+    print(f"ATTN\ndim: m = {batch}, n = {d}, p = {sufix}\nFLOPS: {FLOPS}\n\n")
+    # FLOPS - END
+
     qk = einsum(query, key, " ... q d, ... k d -> ... q k")
     qk_scaled = qk / math.sqrt(key.shape[-1])
     
@@ -160,6 +202,21 @@ def scaled_dot_product_attention(query, key, value, mask = None):
         qk_scaled = qk_scaled.where(mask, neg_inf)
 
     normalized = softmax(qk_scaled, -1)
+
+    # FLOPS - START
+    lead = torch.broadcast_shapes(normalized.shape[:-2], value.shape[:-2])
+    batch = math.prod(lead) if len(lead) else 1
+    q = normalized.shape[-2]
+    k = normalized.shape[-1]
+    d = value.shape[-1]
+    sufix = q * d
+    FLOPS = 2 * batch * sufix * k
+    # TOTAL_FLOPS += FLOPS
+    print("\n",normalized.shape)
+    print(value.shape)
+    print(f"ATTN\ndim: m = {batch}, n = {k}, p = {sufix}\nFLOPS: {FLOPS}\n\n")
+    # FLOPS - END
+
     out = einsum(normalized, value, "... q k, ... k d -> ... q d")
     #output has shape (batch_size, ..., d_v)
     return out
@@ -187,6 +244,16 @@ class MHSA(nn.Module):
         K = einsum(x, self.k_proj_weight, "b s d_model, d_k d_model -> b s d_k")
         V = einsum(x, self.v_proj_weight, "b s d_model, d_v d_model -> b s d_v")
 
+        # FLOPS - START
+        leading = x.shape[0] * x.shape[1] 
+        FLOPS = 3 * 2 * leading * x.shape[2] * self.q_proj_weight.shape[0]
+        # TOTAL_FLOPS += FLOPS
+        print("\n",x.shape)
+        print(self.q_proj_weight.shape)
+        print(f"MHSA - wq, wk and wv\ndim for each one: m = {leading}, n = {x.shape[2]}, p = {self.q_proj_weight.shape[0]}\nFLOPS (for all three): {FLOPS}\n\n")
+        # FLOPS - END
+
+
         # split heads
         Q = rearrange(Q, "b s (h d) -> b h s d", h=self.num_heads)
         K = rearrange(K, "b s (h d) -> b h s d", h=self.num_heads)
@@ -211,6 +278,15 @@ class MHSA(nn.Module):
 
         # output projection
         out = einsum(O, self.o_proj_weight, "b s d_v, d_model d_v -> b s d_model")
+
+        # FLOPS - START
+        leading = O.shape[0] * O.shape[1] 
+        FLOPS = 2 * leading * O.shape[-1] * self.o_proj_weight.shape[0]
+        # TOTAL_FLOPS += FLOPS
+        print("\n",O.shape)
+        print(self.o_proj_weight.shape)
+        print(f"MHSA - wq, wk and wv\ndim: m = {leading}, n = {x.shape[-1]}, p = {self.o_proj_weight.shape[0]}\nFLOPS: {FLOPS}\n\n")
+        # FLOPS - END
 
         return out
 
@@ -264,3 +340,49 @@ class TransformerBlock(nn.Module):
         return result
 
 
+class TransformerLM(nn.Module):
+    def __init__(self, vocab_size, context_length, num_layers, d_model, num_heads, d_ff, rope_theta=None, token_positions = None, device=None, dtype=None):
+        super().__init__()
+
+        self.d_model = d_model
+        self.num_heads = num_heads
+        self.d_ff = d_ff
+        # self.rope = rope
+        # self.max_seq_length = max_seq_length
+        self.token_positions = token_positions
+        self.vocab_size = vocab_size
+        self.context_length = context_length
+        self.num_layers = num_layers
+        self.device = device
+        self.dtype = dtype
+        self.head_dim = d_model // num_heads
+
+        # embedding
+        self.embed = Embedding(vocab_size, d_model) # num_embedding, embedding_dim
+
+        # n transformerblocks
+        if rope_theta is not None:
+            rope = RotaryPositionalEmbedding(rope_theta, self.head_dim, context_length)
+        else:
+            rope = None
+
+        self.blocks = nn.ModuleList(
+            [
+                TransformerBlock(d_model, num_heads, d_ff, rope, token_positions, context_length, device, dtype)
+                for _ in range(num_layers)
+            ]
+        )
+
+        # norm
+        self.norm = RMSNorm(d_model)
+
+        # linear
+        self.linear = Linear(d_model, vocab_size)
+
+    def forward(self, x):
+        x = self.embed.forward(x)
+
+        for block in self.blocks:
+            x = block(x)
+
+        return self.linear(self.norm(x))

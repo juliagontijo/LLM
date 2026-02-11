@@ -11,7 +11,8 @@ from torch import Tensor
 
 from student.pretokenization import train_bpe
 from student.tokenizer import Tokenizer
-from student.transformer import Linear, Embedding, RMSNorm, SwiGLU, RotaryPositionalEmbedding, softmax, scaled_dot_product_attention, MHSA, TransformerBlock
+from student.transformer import Linear, Embedding, RMSNorm, SwiGLU, RotaryPositionalEmbedding, softmax, scaled_dot_product_attention, MHSA, TransformerBlock, TransformerLM
+from student.train_model import cross_entropy_loss, AdamW
 
 
 def run_linear(
@@ -403,7 +404,30 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    
+
+
+    transformer_lm = TransformerLM(vocab_size, context_length, num_layers, d_model, num_heads, d_ff, rope_theta, None)
+
+    state = {}
+    state["embed.hidden"] = weights["token_embeddings.weight"]
+    for i in range(num_layers):
+        state[f"blocks.{i}.attn.q_proj_weight"] = weights[f"layers.{i}.attn.q_proj.weight"]
+        state[f"blocks.{i}.attn.k_proj_weight"] = weights[f"layers.{i}.attn.k_proj.weight"]
+        state[f"blocks.{i}.attn.v_proj_weight"] = weights[f"layers.{i}.attn.v_proj.weight"]
+        state[f"blocks.{i}.attn.o_proj_weight"] = weights[f"layers.{i}.attn.output_proj.weight"]
+
+        state[f"blocks.{i}.ln1.g"] = weights[f"layers.{i}.ln1.weight"]
+        state[f"blocks.{i}.ffn.w1"] = weights[f"layers.{i}.ffn.w1.weight"]
+        state[f"blocks.{i}.ffn.w2"] = weights[f"layers.{i}.ffn.w2.weight"]
+        state[f"blocks.{i}.ffn.w3"] = weights[f"layers.{i}.ffn.w3.weight"]
+        state[f"blocks.{i}.ln2.g"] = weights[f"layers.{i}.ln2.weight"]
+    state["norm.g"] = weights["ln_final.weight"]
+    state["linear.W"] = weights["lm_head.weight"] 
+
+    transformer_lm.load_state_dict(state)
+
+    return transformer_lm.forward(in_indices)
 
 
 def run_rmsnorm(
@@ -500,7 +524,7 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+    return cross_entropy_loss(inputs, targets)
 
 
 def run_gradient_clipping(parameters: Iterable[torch.nn.Parameter], max_l2_norm: float) -> None:
@@ -519,7 +543,7 @@ def get_adamw_cls() -> Any:
     """
     Returns a torch.optim.Optimizer that implements AdamW.
     """
-    raise NotImplementedError
+    return AdamW
 
 
 def run_get_lr_cosine_schedule(
